@@ -1,0 +1,55 @@
+name: Run Nature Bot
+
+on:
+  schedule:
+    # 1. USA Morning (8:30 AM EST) -> India: 7:00 PM IST
+    - cron: '30 13 * * *' # 1:30 PM UTC
+    
+    # 2. USA Lunch (1:30 PM EST) -> India: 12:00 AM IST (Midnight)
+    - cron: '30 18 * * *' # 6:30 PM UTC
+    
+    # 3. USA Evening (8:30 PM EST) -> India: 7:00 AM IST (Next Day)
+    - cron: '30 1 * * *'  # 1:30 AM UTC
+    
+  workflow_dispatch: # Manual button
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # GitHub ko file save karne ki permission dena zaroori hai
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install requests
+
+      - name: Run Nature Bot Script
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          FREESOUND_API_KEY: ${{ secrets.FREESOUND_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MAKE_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }}
+        run: python main.py
+
+      - name: Save History and Push Changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # Agar history file bani hai toh use save karo
+          if [ -f posted_history.txt ]; then
+            git add posted_history.txt
+            git commit -m "Update posting history [skip ci]" || echo "No changes to commit"
+            git push
+          fi
