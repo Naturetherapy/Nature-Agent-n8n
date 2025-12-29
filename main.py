@@ -8,9 +8,31 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 MAKE_WEBHOOK_URL = os.getenv('MAKE_WEBHOOK_URL')
 
 STRICT_TOPICS = [
-    "Tropical Beach Waves", "Amazon Rainforest Rain", "Himalayan Snow Peaks",
-    "Autumn Forest Creek", "Sahara Desert Dunes", "Deep Ocean Blue",
-    "Thunderstorm in Woods", "Crystal Waterfall", "Bamboo Forest Wind"
+    # --- Water & Oceans ---
+    "Deep Turquoise Ocean", "Crashing Blue Waves", "Crystal Clear Waterfall",
+    "Gently Flowing Creek", "Mist Over Lake", "Bubbling Mountain Spring",
+    "Golden Sunlit Pond", "Hidden Forest Stream", "Rippling River Water",
+
+    # --- Forest & Flora ---
+    "Dense Green Rainforest", "Autumn Gold Leaves", "Misty Pine Forest",
+    "Sunlight Through Trees", "Ancient Mossy Oaks", "Wildflower Meadow",
+    "Blooming Flower Garden", "Bamboo Leaf Canopy", "Tall Grass Prairie",
+    "Lush Fern Valley", "Tropical Palm Grove", "Blooming Lavender Field",
+
+    # --- Sky & Atmosphere ---
+    "Fiery Sunset Sky", "Pastel Morning Clouds", "Midnight Starry Galaxy",
+    "Dark Thunderstorm Clouds", "Double Rainbow Arch", "Soft Moonlight Glow",
+    "Swirling Northern Lights", "Purple Twilight Haze", "Bright Blue Sky",
+
+    # --- Terrain & Earth ---
+    "Snowy Mountain Peaks", "Sand Dune Ripples", "Steep Rocky Cliffs",
+    "Rolling Green Hills", "Canyon Stone Layers", "Volcanic Ash Ground",
+    "Glacier Ice Texture", "Moist Soil and Sprout", "Cave Stalactites",
+
+    # --- Weather & Effects ---
+    "Heavy Tropical Rain", "Falling White Snow", "Morning Dew Drops",
+    "Swirling Winter Blizzard", "Golden Hour Sunbeams", "Dense White Fog",
+    "Dry Desert Heatwaves", "Frosty Window Patterns", "Falling Autumn Leaves"
 ]
 
 def get_unique_music():
@@ -27,51 +49,59 @@ def get_unique_music():
 def run_automation():
     topic = random.choice(STRICT_TOPICS)
     
-    # 1. Parallel Fetch: Video and Music together (Saves ~10s)
     with concurrent.futures.ThreadPoolExecutor() as executor:
         music_future = executor.submit(get_unique_music)
+        # /videos/search endpoint image result nahi bhejta, lekin hum safe side rahenge
         video_future = executor.submit(requests.get, 
-            f"https://api.pexels.com/videos/search?query={topic}&per_page=1&orientation=portrait", 
+            f"https://api.pexels.com/videos/search?query={topic}&per_page=3&orientation=portrait", 
             headers={"Authorization": PEXELS_API_KEY}, timeout=7)
         
         music_file = music_future.result()
         v_resp = video_future.result().json()
 
-    if not music_file or not v_resp.get('videos'): return
+    if not music_file or not v_resp.get('videos'): 
+        print("Data not found.")
+        return
 
-    v_link = v_resp['videos'][0]['video_files'][0]['link']
+    # --- STRICT VIDEO FILTERING ---
+    v_link = None
+    for video in v_resp['videos']:
+        for file in video['video_files']:
+            # 'video/mp4' check karega taaki koi jpg ya link na aaye
+            if 'video' in file.get('file_type', ''):
+                v_link = file['link']
+                break
+        if v_link: break
+    
+    if not v_link:
+        print("No pure video file found.")
+        return
+    # ------------------------------
 
-    # 2. Fastest Merge: Stream copy using FFmpeg (Takes 2-3s)
-    # Instruction: Ensure background music is added
+    # FFmpeg command: Music merge ho raha hai (as per your request)
     cmd = ['ffmpeg', '-y', '-i', v_link, '-i', music_file, '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0', '-shortest', '-preset', 'ultrafast', 'final.mp4']
-    subprocess.run(cmd, check=True, timeout=15)
+    subprocess.run(cmd, check=True, timeout=20)
 
-    # 3. Upload to Catbox (Essential for Webhook/Make.com)
+    # Upload and Send
     with open("final.mp4", 'rb') as f:
         up = requests.post('https://catbox.moe/user/api.php', 
                          data={'reqtype': 'fileupload'}, 
                          files={'fileToUpload': f}, 
-                         timeout=25) # Optimized timeout
+                         timeout=25)
         merged_url = up.text.strip()
 
-    # 4. Parallel Sending: Telegram and Make.com Webhook (Saves ~5s)
     if merged_url.startswith('http'):
         def send_tg():
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo", 
                           data={"chat_id": TELEGRAM_CHAT_ID, "caption": f"{topic} #nature"}, 
                           files={"video": open("final.mp4", 'rb')}, timeout=15)
 
-        def send_make():
-            if MAKE_WEBHOOK_URL:
-                requests.post(MAKE_WEBHOOK_URL, json={
-                    "video_url": merged_url, "title": topic, "caption": f"Relaxing {topic}"
-                }, timeout=15)
-
         with concurrent.futures.ThreadPoolExecutor() as executor:
             executor.submit(send_tg)
-            executor.submit(send_make)
+            if MAKE_WEBHOOK_URL:
+                executor.submit(requests.post, MAKE_WEBHOOK_URL, json={"video_url": merged_url}, timeout=15)
         
-        print(f"Success! Workflow completed in under 30s using Catbox.")
+        print(f"Done: {topic}")
 
 if __name__ == "__main__":
     run_automation()
