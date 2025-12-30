@@ -7,7 +7,6 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 MAKE_WEBHOOK_URL = os.getenv('MAKE_WEBHOOK_URL')
 
-# --- AAPKI POORI ORIGINAL LIST (As it was) ---
 STRICT_TOPICS = [
     "Deep Turquoise Ocean", "Crashing Blue Waves", "Crystal Clear Waterfall",
     "Gently Flowing Creek", "Mist Over Lake", "Bubbling Mountain Spring",
@@ -28,7 +27,6 @@ STRICT_TOPICS = [
 ]
 
 def get_unique_music():
-    """Music fetch from Freesound [Rule: Every video must have music]"""
     try:
         url = f"https://freesound.org/apiv2/search/text/?query=nature+piano&token={FREESOUND_API_KEY}&filter=duration:[10 TO 30]&fields=previews&page_size=10"
         resp = requests.get(url, timeout=7).json()
@@ -51,61 +49,60 @@ def run_automation():
         music_file = music_future.result()
         v_resp = video_future.result().json()
 
-    # --- 100% VIDEO FILTERING & DYNAMIC CAPTION ---
     v_link = None
-    title, description, hashtags, final_caption = "", "", "", ""
-    
     if v_resp.get('videos'):
         video_data = random.choice(v_resp['videos'])
         
-        # --- Dynamic Text Logic ---
+        # --- DYNAMIC METADATA (50 Chars & 8 Hashtags) ---
         raw_name = video_data.get('url', "").split('/')[-2].replace('-', ' ').title()
         title = f"Pure {raw_name}"[:50]
-        description = f"Nature view of {topic}."[:50]
-        tags = [f"#{topic.replace(' ', '')}", "#nature", "#viral", "#reels", "#peace", "#view", "#beauty", "#relax"]
+        desc = f"Beautiful {topic} nature view."[:50]
+        tags = [f"#{topic.replace(' ', '')}", "#nature", "#viral", "#reels", "#peace", "#view", "#relax", "#4k"]
         hashtags = " ".join(tags[:8])
-        final_caption = f"{title}\n\n{description}\n\n{hashtags}"
+        final_caption = f"{title}\n\n{desc}\n\n{hashtags}"
 
-        # --- Fix: Image pickup problem solve ---
+        # 100% Video Filtering (No Image)
         for file in video_data['video_files']:
-            if 'video' in file.get('file_type', ''):
+            if 'video' in file.get('file_type', '') or '.mp4' in file.get('link', ''):
                 v_link = file['link']
                 break
     
     if not v_link or not music_file: return
 
-    # --- MERGE PROCESS (Max 10s) ---
+    # --- MERGING (final.mp4) ---
     cmd = ['ffmpeg', '-y', '-i', v_link, '-i', music_file, '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0', '-shortest', '-preset', 'ultrafast', 'final.mp4']
     subprocess.run(cmd, check=True, timeout=20)
 
-    # --- CATBOX UPLOAD (Merged Link for Webhook) ---
+    # --- UPLOAD TO CATBOX (THIS IS THE LINK YOU NEED) ---
     def upload_to_catbox():
         with open("final.mp4", 'rb') as f:
-            r = requests.post('https://catbox.moe/user/api.php', data={'reqtype': 'fileupload'}, files={'fileToUpload': f}, timeout=25)
-            return r.text.strip()
+            r = requests.post('https://catbox.moe/user/api.php', 
+                            data={'reqtype': 'fileupload'}, 
+                            files={'fileToUpload': f}, timeout=25)
+            return r.text.strip() # Merged Link
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         catbox_future = executor.submit(upload_to_catbox)
         
-        # Telegram Send
+        # Telegram notification
         with open("final.mp4", 'rb') as f:
             executor.submit(requests.post, f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo", 
                             data={"chat_id": TELEGRAM_CHAT_ID, "caption": final_caption}, files={"video": f})
         
+        # WEBHOOK KO SIRF MERGED LINK BHEJNA
         merged_url = catbox_future.result()
         
-        # --- WEBHOOK DATA (All fields included) ---
         if MAKE_WEBHOOK_URL and merged_url.startswith('http'):
+            # Pakka kar rahe hain ki output me Catbox link hi jaye
             executor.submit(requests.post, MAKE_WEBHOOK_URL, json={
-                "video_url": merged_url, 
+                "video_url": merged_url,  # Ye Catbox ka merged link hai
                 "title": title,
-                "description": description,
+                "description": desc,
                 "caption": final_caption,
-                "hashtags": hashtags,
-                "topic": topic
+                "hashtags": hashtags
             }, timeout=15)
 
-    print(f"Done! Process Time: {time.time() - start_time:.2f}s")
+    print(f"Total Time: {time.time() - start_time:.2f}s | Output: {merged_url}")
 
 if __name__ == "__main__":
     run_automation()
