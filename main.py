@@ -7,7 +7,7 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 MAKE_WEBHOOK_URL = os.getenv('MAKE_WEBHOOK_URL')
 
-# --- AAPKI POORI TOPIC LIST ---
+# --- AAPKI POORI ORIGINAL LIST (As it was) ---
 STRICT_TOPICS = [
     "Deep Turquoise Ocean", "Crashing Blue Waves", "Crystal Clear Waterfall",
     "Gently Flowing Creek", "Mist Over Lake", "Bubbling Mountain Spring",
@@ -28,7 +28,7 @@ STRICT_TOPICS = [
 ]
 
 def get_unique_music():
-    """Freesound fetch - Mandatory Background Music"""
+    """Music fetch from Freesound [Rule: Every video must have music]"""
     try:
         url = f"https://freesound.org/apiv2/search/text/?query=nature+piano&token={FREESOUND_API_KEY}&filter=duration:[10 TO 30]&fields=previews&page_size=10"
         resp = requests.get(url, timeout=7).json()
@@ -51,59 +51,61 @@ def run_automation():
         music_file = music_future.result()
         v_resp = video_future.result().json()
 
-    # --- 100% VIDEO FILTERING (No Image Pickup) ---
+    # --- 100% VIDEO FILTERING & DYNAMIC CAPTION ---
     v_link = None
-    final_caption = ""
+    title, description, hashtags, final_caption = "", "", "", ""
+    
     if v_resp.get('videos'):
         video_data = random.choice(v_resp['videos'])
         
-        # --- Caption Sudhaar (50 Chars & 8 Hashtags) ---
-        raw_text = video_data.get('url', topic).split('/')[-2].replace('-', ' ').title()
-        title_desc = raw_text[:50] #
-        tags = ["#nature", "#peace", "#viral", "#reels", "#beautiful", "#soothing", "#relax", "#view"]
-        hashtags = " ".join(tags[:8]) #
-        final_caption = f"{title_desc}\n\n{hashtags}"
+        # --- Dynamic Text Logic ---
+        raw_name = video_data.get('url', "").split('/')[-2].replace('-', ' ').title()
+        title = f"Pure {raw_name}"[:50]
+        description = f"Nature view of {topic}."[:50]
+        tags = [f"#{topic.replace(' ', '')}", "#nature", "#viral", "#reels", "#peace", "#view", "#beauty", "#relax"]
+        hashtags = " ".join(tags[:8])
+        final_caption = f"{title}\n\n{description}\n\n{hashtags}"
 
+        # --- Fix: Image pickup problem solve ---
         for file in video_data['video_files']:
-            # 'video' check pakka karta hai ki image pickup na ho
             if 'video' in file.get('file_type', ''):
                 v_link = file['link']
                 break
     
     if not v_link or not music_file: return
 
-    # --- FFmpeg Merge (30s Speed Goal) ---
-    # Background music yahan merge ho raha hai
+    # --- MERGE PROCESS (Max 10s) ---
     cmd = ['ffmpeg', '-y', '-i', v_link, '-i', music_file, '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0', '-shortest', '-preset', 'ultrafast', 'final.mp4']
     subprocess.run(cmd, check=True, timeout=20)
 
-    # --- Catbox.moe Upload (FOR THE MERGED LINK) ---
+    # --- CATBOX UPLOAD (Merged Link for Webhook) ---
     def upload_to_catbox():
         with open("final.mp4", 'rb') as f:
-            # Merged file Catbox par jati hai
-            r = requests.post('https://catbox.moe/user/api.php', 
-                            data={'reqtype': 'fileupload'}, 
-                            files={'fileToUpload': f}, timeout=25)
+            r = requests.post('https://catbox.moe/user/api.php', data={'reqtype': 'fileupload'}, files={'fileToUpload': f}, timeout=25)
             return r.text.strip()
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         catbox_future = executor.submit(upload_to_catbox)
         
-        # Telegram notification with merged video
+        # Telegram Send
         with open("final.mp4", 'rb') as f:
             executor.submit(requests.post, f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo", 
                             data={"chat_id": TELEGRAM_CHAT_ID, "caption": final_caption}, files={"video": f})
         
         merged_url = catbox_future.result()
         
+        # --- WEBHOOK DATA (All fields included) ---
         if MAKE_WEBHOOK_URL and merged_url.startswith('http'):
-            # CATBOX ka MERGED link Webhook ko bhej raha hai
             executor.submit(requests.post, MAKE_WEBHOOK_URL, json={
                 "video_url": merged_url, 
-                "caption": final_caption
+                "title": title,
+                "description": description,
+                "caption": final_caption,
+                "hashtags": hashtags,
+                "topic": topic
             }, timeout=15)
 
-    print(f"Success! Total Time: {time.time() - start_time:.2f}s")
+    print(f"Done! Process Time: {time.time() - start_time:.2f}s")
 
 if __name__ == "__main__":
     run_automation()
