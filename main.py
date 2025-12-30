@@ -7,30 +7,18 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 MAKE_WEBHOOK_URL = os.getenv('MAKE_WEBHOOK_URL')
 
-# --- AAPKI POORI LIST WAPAS DAAL DI HAI ---
 STRICT_TOPICS = [
     "Deep Turquoise Ocean", "Crashing Blue Waves", "Crystal Clear Waterfall",
     "Gently Flowing Creek", "Mist Over Lake", "Bubbling Mountain Spring",
-    "Golden Sunlit Pond", "Hidden Forest Stream", "Rippling River Water",
-    "Dense Green Rainforest", "Autumn Gold Leaves", "Misty Pine Forest",
     "Sunlight Through Trees", "Ancient Mossy Oaks", "Wildflower Meadow",
-    "Blooming Flower Garden", "Bamboo Leaf Canopy", "Tall Grass Prairie",
-    "Lush Fern Valley", "Tropical Palm Grove", "Blooming Lavender Field",
-    "Fiery Sunset Sky", "Pastel Morning Clouds", "Midnight Starry Galaxy",
-    "Dark Thunderstorm Clouds", "Double Rainbow Arch", "Soft Moonlight Glow",
-    "Swirling Northern Lights", "Purple Twilight Haze", "Bright Blue Sky",
-    "Snowy Mountain Peaks", "Sand Dune Ripples", "Steep Rocky Cliffs",
-    "Rolling Green Hills", "Canyon Stone Layers", "Volcanic Ash Ground",
-    "Glacier Ice Texture", "Moist Soil and Sprout", "Cave Stalactites",
-    "Heavy Tropical Rain", "Falling White Snow", "Morning Dew Drops",
-    "Swirling Winter Blizzard", "Golden Hour Sunbeams", "Dense White Fog",
-    "Dry Desert Heatwaves", "Frosty Window Patterns", "Falling Autumn Leaves"
+    "Lush Fern Valley", "Tropical Palm Grove", "Fiery Sunset Sky",
+    "Snowy Mountain Peaks", "Rolling Green Hills", "Heavy Tropical Rain"
 ]
 
 def get_unique_music():
-    """Fast music fetch - 5 seconds timeout"""
+    """Freesound se music fetch karna - Timeout 5s for speed"""
     try:
-        url = f"https://freesound.org/apiv2/search/text/?query=nature+piano&token={FREESOUND_API_KEY}&filter=duration:[10 TO 20]&fields=previews&page_size=10"
+        url = f"https://freesound.org/apiv2/search/text/?query=nature+ambient&token={FREESOUND_API_KEY}&filter=duration:[10 TO 30]&fields=previews&page_size=10"
         resp = requests.get(url, timeout=5).json()
         m_url = random.choice(resp['results'])['previews']['preview-hq-mp3']
         r = requests.get(m_url, timeout=5)
@@ -42,7 +30,6 @@ def run_automation():
     start_time = time.time()
     topic = random.choice(STRICT_TOPICS)
     
-    # Parallel Fetching for Speed (Saves 5-10 seconds)
     with concurrent.futures.ThreadPoolExecutor() as executor:
         music_future = executor.submit(get_unique_music)
         video_future = executor.submit(requests.get, 
@@ -52,22 +39,23 @@ def run_automation():
         music_file = music_future.result()
         v_resp = video_future.result().json()
 
-    # --- 100% VIDEO PICKUP LOGIC (No Images) ---
+    # --- 100% VIDEO FILTERING (SUDHAAR) ---
     v_link = None
     if v_resp.get('videos'):
         for video in v_resp['videos']:
-            # Sirf mp4 link filter kar rahe hain
-            files = [f for f in video['video_files'] if 'video/mp4' in f.get('file_type', '') or '.mp4' in f.get('link', '')]
+            # Yahan hum pakka kar rahe hain ki sirf 'video/mp4' hi select ho
+            files = [f for f in video['video_files'] if f.get('file_type') == 'video/mp4' or '.mp4' in f.get('link', '')]
             if files:
+                # Sabse pehla valid mp4 link uthayega
                 v_link = files[0]['link']
                 break
     
     if not v_link or not music_file:
-        print("Required data missing.")
+        print("Video ya Music link nahi mila.")
         return
 
-    # --- ULTRAFAST FFMEPG MERGE (Max 10s) ---
-    # Aapka background music rule yahan apply ho raha hai
+    # --- FFmpeg: Video + Music Merge (As per your Rule) ---
+    # '-preset ultrafast' isse process 10 second mein khatam hoga
     cmd = [
         'ffmpeg', '-y', '-i', v_link, '-i', music_file, 
         '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0', 
@@ -75,30 +63,32 @@ def run_automation():
     ]
     subprocess.run(cmd, check=True, timeout=15)
 
-    # --- UPLOAD & NOTIFY (Parallel) ---
-    def upload_final():
+    # --- Catbox.moe Upload & Webhook ---
+    def upload_to_catbox():
         with open("final.mp4", 'rb') as f:
+            # Catbox hamesha merged video ka direct link deta hai
             r = requests.post('https://catbox.moe/user/api.php', 
                             data={'reqtype': 'fileupload'}, 
-                            files={'fileToUpload': f}, timeout=15)
+                            files={'fileToUpload': f}, timeout=20)
             return r.text.strip()
 
-    def send_to_telegram():
+    def send_to_tg():
         with open("final.mp4", 'rb') as f:
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo", 
-                          data={"chat_id": TELEGRAM_CHAT_ID, "caption": f"🎬 {topic}"}, 
+                          data={"chat_id": TELEGRAM_CHAT_ID, "caption": f"✅ {topic}"}, 
                           files={"video": f}, timeout=15)
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        up_future = executor.submit(upload_final)
-        executor.submit(send_to_telegram)
+        catbox_future = executor.submit(upload_to_catbox)
+        executor.submit(send_to_tg)
         
-        merged_url = up_future.result()
+        merged_url = catbox_future.result()
+        
         if MAKE_WEBHOOK_URL and merged_url.startswith('http'):
-            # Webhook ko merged video URL 10 second ke andar bhejna
+            # Merged link hi Webhook ko bhej raha hai (Fixed)
             executor.submit(requests.post, MAKE_WEBHOOK_URL, json={"video_url": merged_url}, timeout=10)
 
-    print(f"Total Time: {time.time() - start_time:.2f}s | Topic: {topic}")
+    print(f"Total Time: {time.time() - start_time:.2f}s | Merged URL: {merged_url}")
 
 if __name__ == "__main__":
     run_automation()
