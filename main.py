@@ -10,25 +10,16 @@ MAKE_WEBHOOK_URL = os.getenv('MAKE_WEBHOOK_URL')
 STRICT_TOPICS = [
     "Deep Turquoise Ocean", "Crashing Blue Waves", "Crystal Clear Waterfall",
     "Gently Flowing Creek", "Mist Over Lake", "Bubbling Mountain Spring",
-    "Golden Sunlit Pond", "Hidden Forest Stream", "Rippling River Water",
     "Dense Green Rainforest", "Autumn Gold Leaves", "Misty Pine Forest",
     "Sunlight Through Trees", "Ancient Mossy Oaks", "Wildflower Meadow",
-    "Blooming Flower Garden", "Bamboo Leaf Canopy", "Tall Grass Prairie",
     "Lush Fern Valley", "Tropical Palm Grove", "Blooming Lavender Field",
     "Fiery Sunset Sky", "Pastel Morning Clouds", "Midnight Starry Galaxy",
-    "Dark Thunderstorm Clouds", "Double Rainbow Arch", "Soft Moonlight Glow",
-    "Swirling Northern Lights", "Purple Twilight Haze", "Bright Blue Sky",
-    "Snowy Mountain Peaks", "Sand Dune Ripples", "Steep Rocky Cliffs",
-    "Rolling Green Hills", "Canyon Stone Layers", "Volcanic Ash Ground",
-    "Glacier Ice Texture", "Moist Soil and Sprout", "Cave Stalactites",
-    "Heavy Tropical Rain", "Falling White Snow", "Morning Dew Drops",
-    "Swirling Winter Blizzard", "Golden Hour Sunbeams", "Dense White Fog",
-    "Dry Desert Heatwaves", "Frosty Window Patterns", "Falling Autumn Leaves"
+    "Dark Thunderstorm Clouds", "Double Rainbow Arch", "Soft Moonlight Glow"
 ]
 
 def get_unique_music():
     try:
-        url = f"https://freesound.org/apiv2/search/text/?query=nature+piano&token={FREESOUND_API_KEY}&filter=duration:[10 TO 30]&fields=previews&page_size=10"
+        url = f"https://freesound.org/apiv2/search/text/?query=nature+ambient&token={FREESOUND_API_KEY}&filter=duration:[10 TO 30]&fields=previews&page_size=10"
         resp = requests.get(url, timeout=7).json()
         m_url = random.choice(resp['results'])['previews']['preview-hq-mp3']
         r = requests.get(m_url, timeout=7)
@@ -42,44 +33,55 @@ def run_automation():
     
     with concurrent.futures.ThreadPoolExecutor() as executor:
         music_future = executor.submit(get_unique_music)
+        # Search specifically for videos
         video_future = executor.submit(requests.get, 
-            f"https://api.pexels.com/videos/search?query={topic}&per_page=5&orientation=portrait", 
+            f"https://api.pexels.com/videos/search?query={topic}&per_page=10&orientation=portrait", 
             headers={"Authorization": PEXELS_API_KEY}, timeout=7)
         
         music_file = music_future.result()
         v_resp = video_future.result().json()
 
+    # --- 100% STRICT VIDEO-ONLY LOGIC ---
     v_link = None
-    if v_resp.get('videos'):
-        video_data = random.choice(v_resp['videos'])
-        
-        # --- DYNAMIC METADATA (50 Chars & 8 Hashtags) ---
-        raw_name = video_data.get('url', "").split('/')[-2].replace('-', ' ').title()
-        title = f"Pure {raw_name}"[:50]
-        desc = f"Beautiful {topic} nature view."[:50]
-        tags = [f"#{topic.replace(' ', '')}", "#nature", "#viral", "#reels", "#peace", "#view", "#relax", "#4k"]
-        hashtags = " ".join(tags[:8])
-        final_caption = f"{title}\n\n{desc}\n\n{hashtags}"
+    title, desc, hashtags, final_caption = "", "", "", ""
 
-        # 100% Video Filtering (No Image)
-        for file in video_data['video_files']:
-            if 'video' in file.get('file_type', '') or '.mp4' in file.get('link', ''):
-                v_link = file['link']
-                break
+    if v_resp.get('videos'):
+        for video in v_resp['videos']:
+            # Metadata generation
+            raw_name = video.get('url', "").split('/')[-2].replace('-', ' ').title()
+            title = f"Pure {raw_name}"[:50]
+            desc = f"Nature vibes: {topic}"[:50]
+            tags = [f"#{topic.replace(' ', '')}", "#nature", "#viral", "#reels", "#peace", "#view", "#4k", "#relax"]
+            hashtags = " ".join(tags[:8])
+            final_caption = f"{title}\n\n{desc}\n\n{hashtags}"
+
+            # DOUBLE-LOCK FILTER
+            for file in video['video_files']:
+                link = file.get('link', '')
+                f_type = file.get('file_type', '')
+                
+                # Check 1: File type must be video/mp4
+                # Check 2: Link must end with .mp4 (removes jpg/png previews)
+                if 'video/mp4' in f_type and ('.mp4' in link.lower()):
+                    v_link = link
+                    break
+            if v_link: break # Agar video mil gayi toh loop stop karein
     
-    if not v_link or not music_file: return
+    if not v_link or not music_file:
+        print("Video/Music file missing.")
+        return
 
     # --- MERGING (final.mp4) ---
     cmd = ['ffmpeg', '-y', '-i', v_link, '-i', music_file, '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0', '-shortest', '-preset', 'ultrafast', 'final.mp4']
-    subprocess.run(cmd, check=True, timeout=20)
+    subprocess.run(cmd, check=True, timeout=25)
 
-    # --- UPLOAD TO CATBOX (THIS IS THE LINK YOU NEED) ---
+    # --- CATBOX UPLOAD (MERGED LINK ONLY) ---
     def upload_to_catbox():
         with open("final.mp4", 'rb') as f:
             r = requests.post('https://catbox.moe/user/api.php', 
                             data={'reqtype': 'fileupload'}, 
-                            files={'fileToUpload': f}, timeout=25)
-            return r.text.strip() # Merged Link
+                            files={'fileToUpload': f}, timeout=30)
+            return r.text.strip()
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         catbox_future = executor.submit(upload_to_catbox)
@@ -89,17 +91,17 @@ def run_automation():
             executor.submit(requests.post, f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo", 
                             data={"chat_id": TELEGRAM_CHAT_ID, "caption": final_caption}, files={"video": f})
         
-        # WEBHOOK KO SIRF MERGED LINK BHEJNA
         merged_url = catbox_future.result()
         
+        # FINAL WEBHOOK OUTPUT (Catbox Link)
         if MAKE_WEBHOOK_URL and merged_url.startswith('http'):
-            # Pakka kar rahe hain ki output me Catbox link hi jaye
             executor.submit(requests.post, MAKE_WEBHOOK_URL, json={
-                "video_url": merged_url,  # Ye Catbox ka merged link hai
+                "video_url": merged_url, # Always Catbox Merged Link
                 "title": title,
                 "description": desc,
                 "caption": final_caption,
-                "hashtags": hashtags
+                "hashtags": hashtags,
+                "status": "success"
             }, timeout=15)
 
     print(f"Total Time: {time.time() - start_time:.2f}s | Output: {merged_url}")
