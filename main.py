@@ -10,6 +10,7 @@ MAKE_WEBHOOK_URL = os.getenv('MAKE_WEBHOOK_URL')
 HISTORY_FILE = "posted_history.txt"
 FIXED_HASHTAGS = "#nature #wildlife #serenity #earth #landscape #adventure #explore #scenery"
 
+# --- Vapas Saare 18 Strict Topics Add Kar Diye ---
 STRICT_TOPICS = [
     "Tropical Beach Waves", "Amazon Rainforest Rain", "Himalayan Snow Peaks",
     "Autumn Forest Creek", "Sahara Desert Dunes", "Deep Ocean Blue",
@@ -27,7 +28,7 @@ def save_to_history(v_id, a_id):
     with open(HISTORY_FILE, "a") as f: f.write(f"{v_id}\n{a_id}\n")
 
 def get_unique_music(history):
-    """Speed: 5-8 seconds"""
+    """Nature Piano background music fetch (5-8s)"""
     try:
         r_page = random.randint(1, 50)
         url = f"https://freesound.org/apiv2/search/text/?query=nature+piano&token={FREESOUND_API_KEY}&filter=duration:[10 TO 25]&fields=id,previews&page_size=10"
@@ -44,7 +45,7 @@ def get_unique_music(history):
     return None, None
 
 def parallel_delivery(merged_url, title, caption, hashtags):
-    """Sends to Telegram and Webhook simultaneously to meet 30s target"""
+    """Telegram aur Webhook ko ek saath bhejta hai (Parallel)"""
     def send_tg():
         try:
             full_text = f"{title}\n\n{caption}\n\n{hashtags}"
@@ -58,7 +59,7 @@ def parallel_delivery(merged_url, title, caption, hashtags):
         try:
             if MAKE_WEBHOOK_URL:
                 requests.post(MAKE_WEBHOOK_URL, json={
-                    "video_url": merged_url, # Merged Catbox link
+                    "video_url": merged_url, 
                     "title": title, 
                     "caption": caption,
                     "hashtags": hashtags
@@ -75,11 +76,11 @@ def run_automation():
     title = f"{random.choice(['Pure', 'Calm', 'Wild'])} {topic} Magic".strip()[:50]
     short_caption = f"Relaxing {topic} vibes.".strip()[:50]
     
-    # 1. Parallel Fetch Video & Music
+    # 1. Parallel Fetch (Saves ~10 seconds)
     with concurrent.futures.ThreadPoolExecutor() as executor:
         music_future = executor.submit(get_unique_music, history)
         video_future = executor.submit(requests.get, 
-            f"https://api.pexels.com/videos/search?query={topic}&per_page=10&orientation=portrait", 
+            f"https://api.pexels.com/videos/search?query={topic}&per_page=15&orientation=portrait", 
             headers={"Authorization": PEXELS_API_KEY}, timeout=10)
         
         music_file, a_id = music_future.result()
@@ -87,30 +88,37 @@ def run_automation():
 
     if not music_file or not v_resp.get('videos'): return
 
-    # 2. Image Blocker & Merging
+    # 2. STRICT IMAGE BLOCKER
+    selected_v_link = None
+    selected_v_id = None
     for vid in v_resp['videos']:
         v_id = str(vid['id'])
         if v_id not in history:
-            # IMAGE BLOCKER: Ensures only mp4 video files are picked
-            v_link = next((f['link'] for f in vid['video_files'] if 'video' in f.get('file_type', 'video')), None)
-            if not v_link: continue
+            # Check only for video files, skip any images
+            v_link = next((f['link'] for f in vid['video_files'] if 'video' in f.get('file_type', '')), None)
+            if v_link:
+                selected_v_link = v_link
+                selected_v_id = v_id
+                break
 
-            # FAST MERGE: Stream copy (Takes ~2s). Music added as per instruction.
-            cmd = ['ffmpeg', '-y', '-i', v_link, '-i', music_file, '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0', '-shortest', '-preset', 'ultrafast', 'final.mp4']
-            subprocess.run(cmd, check=True, timeout=20)
+    if selected_v_link:
+        # 3. FASTEST MERGE (2-3 seconds)
+        # Background music added as per instruction
+        cmd = ['ffmpeg', '-y', '-i', selected_v_link, '-i', music_file, '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0', '-shortest', '-preset', 'ultrafast', 'final.mp4']
+        subprocess.run(cmd, check=True, timeout=20)
 
-            # 3. Catbox Upload
-            if os.path.exists("final.mp4"):
-                with open("final.mp4", 'rb') as f:
-                    up = requests.post('https://catbox.moe/user/api.php', data={'reqtype': 'fileupload'}, files={'fileToUpload': f}, timeout=60)
-                    merged_url = up.text.strip()
-                
-                if merged_url.startswith('http'):
-                    # 4. Final Delivery
-                    parallel_delivery(merged_url, title, short_caption, FIXED_HASHTAGS)
-                    save_to_history(v_id, a_id)
-                    print(f"Success! {title}")
-                    return
+        # 4. Catbox Upload (Merged File)
+        if os.path.exists("final.mp4"):
+            with open("final.mp4", 'rb') as f:
+                up = requests.post('https://catbox.moe/user/api.php', data={'reqtype': 'fileupload'}, files={'fileToUpload': f}, timeout=60)
+                merged_url = up.text.strip()
+            
+            if merged_url.startswith('http'):
+                # 5. Parallel Send to TG & Webhook
+                parallel_delivery(merged_url, title, short_caption, FIXED_HASHTAGS)
+                save_to_history(selected_v_id, a_id)
+                print(f"Success! {topic}")
+                return
 
 if __name__ == "__main__":
     run_automation()
